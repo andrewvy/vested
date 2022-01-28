@@ -1,20 +1,33 @@
 use chrono::{Date, Datelike, Utc};
+use chronoutil::{DateRule, RelativeDuration};
 
-enum VestingScheduleKind {
-    Monthly,
+#[derive(Debug, PartialEq, PartialOrd)]
+struct VestingPeriod {
+    date: Date<Utc>,
+    cumulative_vested_amount: i32,
 }
 
 struct VestingSchedule {
-    kind: VestingScheduleKind,
+    from_date: Date<Utc>,
+    to_date: Date<Utc>,
+    periods: Vec<VestingPeriod>,
+}
+
+enum VestingInterval {
+    Monthly,
+}
+
+struct VestingScheduleConfiguration {
+    interval: VestingInterval,
     cliff_percentage: f32,
-    cliff: u32,
-    length: u32,
+    cliff: i32,
+    length: i32,
 }
 
 struct Grant {
-    amount: u32,
+    amount: i32,
     grant_date: Date<Utc>,
-    vesting_schedule: VestingSchedule,
+    vesting_schedule: VestingScheduleConfiguration,
 }
 
 impl Grant {
@@ -39,16 +52,15 @@ impl Grant {
 
     /// Calculates the vested amount on a given future date.
     pub fn calculate_vested_amount(&self, future_date: Date<Utc>) -> f32 {
-        match self.vesting_schedule.kind {
-            VestingScheduleKind::Monthly => {
+        match self.vesting_schedule.interval {
+            VestingInterval::Monthly => {
                 if self.is_before_cliff(future_date) {
                     return 0.0;
-                } else if self.months_difference(future_date) > self.vesting_schedule.length as i32
-                {
+                } else if self.months_difference(future_date) > self.vesting_schedule.length {
                     return self.amount as f32;
                 } else {
                     let months_past_cliff =
-                        self.months_difference(future_date) - self.vesting_schedule.cliff as i32;
+                        self.months_difference(future_date) - self.vesting_schedule.cliff;
 
                     if months_past_cliff == 0 {
                         return self.cliff_vested_amount();
@@ -65,6 +77,26 @@ impl Grant {
             }
         }
     }
+
+    /// Calculate a full vesting schedule, listing the vested amounts per vesting period.
+    pub fn calculate_vesting_schedule(&self) -> VestingSchedule {
+        let duration = RelativeDuration::months(self.vesting_schedule.length);
+        let to_date = self.grant_date + duration;
+        let rule = DateRule::monthly(self.grant_date)
+            .with_count(self.vesting_schedule.length as usize + 1);
+        let periods = rule
+            .map(|month| VestingPeriod {
+                date: month,
+                cumulative_vested_amount: self.calculate_vested_amount(month).floor() as i32,
+            })
+            .collect();
+
+        return VestingSchedule {
+            periods,
+            from_date: self.grant_date,
+            to_date,
+        };
+    }
 }
 
 #[cfg(test)]
@@ -72,15 +104,17 @@ mod tests {
     use approx::assert_relative_eq;
     use chrono::TimeZone;
 
-    use super::{Grant, Utc, VestingSchedule, VestingScheduleKind};
+    use crate::VestingPeriod;
+
+    use super::{Grant, Utc, VestingInterval, VestingScheduleConfiguration};
 
     #[test]
-    fn it_works() {
+    fn it_can_calculate_vested_amounts_for_given_dates() {
         let grant = Grant {
             amount: 10_000,
             grant_date: Utc.ymd(2020, 2, 6),
-            vesting_schedule: VestingSchedule {
-                kind: VestingScheduleKind::Monthly,
+            vesting_schedule: VestingScheduleConfiguration {
+                interval: VestingInterval::Monthly,
                 cliff: 12,
                 cliff_percentage: 0.25,
                 length: 48,
@@ -144,5 +178,81 @@ mod tests {
             10000.00,
             max_relative = 0.005
         );
+    }
+
+    #[test]
+    fn it_can_calculate_full_vesting_schedule() {
+        let grant = Grant {
+            amount: 10_000,
+            grant_date: Utc.ymd(2020, 2, 6),
+            vesting_schedule: VestingScheduleConfiguration {
+                interval: VestingInterval::Monthly,
+                cliff: 6,
+                cliff_percentage: 0.25,
+                length: 12,
+            },
+        };
+
+        let vesting_schedule = grant.calculate_vesting_schedule();
+
+        assert_eq!(vesting_schedule.from_date, grant.grant_date);
+        assert_eq!(vesting_schedule.to_date, Utc.ymd(2021, 2, 6));
+
+        let periods = vec![
+            VestingPeriod {
+                date: Utc.ymd(2020, 2, 6),
+                cumulative_vested_amount: 0,
+            },
+            VestingPeriod {
+                date: Utc.ymd(2020, 3, 6),
+                cumulative_vested_amount: 0,
+            },
+            VestingPeriod {
+                date: Utc.ymd(2020, 4, 6),
+                cumulative_vested_amount: 0,
+            },
+            VestingPeriod {
+                date: Utc.ymd(2020, 5, 6),
+                cumulative_vested_amount: 0,
+            },
+            VestingPeriod {
+                date: Utc.ymd(2020, 6, 6),
+                cumulative_vested_amount: 0,
+            },
+            VestingPeriod {
+                date: Utc.ymd(2020, 7, 6),
+                cumulative_vested_amount: 0,
+            },
+            VestingPeriod {
+                date: Utc.ymd(2020, 8, 6),
+                cumulative_vested_amount: 2500,
+            },
+            VestingPeriod {
+                date: Utc.ymd(2020, 9, 6),
+                cumulative_vested_amount: 3750,
+            },
+            VestingPeriod {
+                date: Utc.ymd(2020, 10, 6),
+                cumulative_vested_amount: 5000,
+            },
+            VestingPeriod {
+                date: Utc.ymd(2020, 11, 6),
+                cumulative_vested_amount: 6250,
+            },
+            VestingPeriod {
+                date: Utc.ymd(2020, 12, 6),
+                cumulative_vested_amount: 7500,
+            },
+            VestingPeriod {
+                date: Utc.ymd(2021, 1, 6),
+                cumulative_vested_amount: 8750,
+            },
+            VestingPeriod {
+                date: Utc.ymd(2021, 2, 6),
+                cumulative_vested_amount: 10000,
+            },
+        ];
+
+        assert_eq!(vesting_schedule.periods, periods)
     }
 }
