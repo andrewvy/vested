@@ -18,35 +18,49 @@ struct Grant {
 }
 
 impl Grant {
+    /// Calculates the difference of months between the grant date and the given future date.
+    fn months_difference(&self, future_date: Date<Utc>) -> i32 {
+        let year_difference = future_date.year() - self.grant_date.year();
+        let months_difference =
+            (year_difference * 12) + (future_date.month() as i32 - self.grant_date.month() as i32);
+
+        return months_difference;
+    }
+
+    /// Checks if the given future date is still in the cliff period.
+    fn is_before_cliff(&self, future_date: Date<Utc>) -> bool {
+        return self.months_difference(future_date) < self.vesting_schedule.cliff as i32;
+    }
+
+    /// Returns the amount of vested equity when cliff period has been reached.
+    fn cliff_vested_amount(&self) -> f32 {
+        return self.amount as f32 * self.vesting_schedule.cliff_percentage;
+    }
+
+    /// Calculates the vested amount on a given future date.
     pub fn calculate_vested_amount(&self, future_date: Date<Utc>) -> f32 {
         match self.vesting_schedule.kind {
             VestingScheduleKind::Monthly => {
-                let year_difference = future_date.year() - self.grant_date.year();
-                let months_difference = (year_difference * 12)
-                    + (future_date.month() as i32 - self.grant_date.month() as i32);
-
-                let is_before_cliff = months_difference < self.vesting_schedule.cliff as i32;
-
-                if is_before_cliff {
+                if self.is_before_cliff(future_date) {
                     return 0.0;
-                } else if months_difference > self.vesting_schedule.length as i32 {
+                } else if self.months_difference(future_date) > self.vesting_schedule.length as i32
+                {
                     return self.amount as f32;
                 } else {
-                    let months_past_cliff = months_difference - self.vesting_schedule.cliff as i32;
-                    let vested_with_cliff =
-                        self.amount as f32 * self.vesting_schedule.cliff_percentage;
+                    let months_past_cliff =
+                        self.months_difference(future_date) - self.vesting_schedule.cliff as i32;
 
                     if months_past_cliff == 0 {
-                        return vested_with_cliff;
+                        return self.cliff_vested_amount();
                     }
 
                     let remaining_amount_after_cliff: f32 =
-                        (self.amount as f32 - vested_with_cliff).into();
+                        (self.amount as f32 - self.cliff_vested_amount()).into();
                     let vested_per_month: f32 = remaining_amount_after_cliff
                         / (self.vesting_schedule.length - self.vesting_schedule.cliff) as f32;
                     let vested_after_cliff: f32 = vested_per_month * months_past_cliff as f32;
 
-                    return vested_with_cliff + vested_after_cliff;
+                    return self.cliff_vested_amount() + vested_after_cliff;
                 }
             }
         }

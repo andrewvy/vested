@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 chrono = "0.4"
+chronoutil = "0.2.3"
 
 [dev-dependencies]
 approx = "0.5.1"
